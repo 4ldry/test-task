@@ -1,1 +1,5 @@
 matplotlib
+tree-sitter==0.22.3
+tree-sitter-python==0.21.0
+tree-sitter-java==0.21.0
+datasets==2.20.0
