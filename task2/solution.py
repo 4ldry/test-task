@@ -3,7 +3,32 @@ from tree_sitter import Parser, Language, Node
 import tree_sitter_python as tspython
 from pathlib import Path
 from dataclasses import dataclass
-from typing import Any
+from collections import defaultdict
+from enum import Enum
+import json
+
+class Pattern(Enum):
+    docs_coms = """
+    [
+        (expression_statement(string))
+        (comment)
+    ] @comsdocs
+    """
+    func_body = """
+    (function_definition (block) @func)
+    """
+    func_name = """
+    (function_definition name: (identifier)@func_name)
+    """
+    func_header = """
+    (function_definition ["def" name: (identifier) parameters: (parameters) ":"]@header)
+    """
+
+class Answer(Enum):
+    result_func_name = ...#(Pattern.func_name,)
+    result_body_with_coms = ...#(Pattern.func_body,)
+    result_body_no_coms = ...#(Pattern.func_body, Pattern.docs_coms)
+    result_masked_no_coms = ...#(Pattern.func_header, Pattern.func_name, Pattern.docs_coms)
 
 
 @dataclass
@@ -12,84 +37,55 @@ class Solution:
     parser: Parser = Parser(language=py_language)
 
     def load_dataset(self) -> datasets.Dataset:
-        return datasets.load_dataset(path="code-search-net/code_search_net", name="python", split="test", trust_remote_code=True, cache_dir=Path(__file__).parent / "datasets")
+        return datasets.load_dataset(path="code-search-net/code_search_net", name="python", split="test", trust_remote_code=True, cache_dir=(Path(__file__).parent / "datasets"))
     
     def get_root_node_from_source_code(self, source_code: str) -> Node:
         tree = self.parser.parse(source_code.encode())
         root_node = tree.root_node
         return root_node
         
-    def process_root_node(self, root_node: Node) -> dict:
-        pattern_docs = """
-        (
-            (function_definition
-                body: (
-                    block (
-                        expression_statement (string) @docstring
-                    )
-                )
-            )
-        )
-        """
-        pattern_coms = """
-        (
-            (comment) @comment
-        )
-        """
-        pattern_func = """
-        (
-            (function_definition) @function
-        )
-        """
-        pattern_func_name = """
-        (
-            function_definition
-                name: identifier @func_name
-        )
-        """
-        query_docs = self.py_language.query(pattern_docs)
-        query_coms =  self.py_language.query(pattern_coms)
-        query_func_name = self.py_language.query(pattern_func_name)
-        query_func = self.py_language.query(pattern_func)
-        capture_docs = query_docs.captures(root_node)
-        capture_coms = query_coms.captures(root_node)
-        capture_func_name = query_func_name.captures(root_node)
-        capture_func = query_func.captures(root_node)
-        func_node = capture_func[0][0]
-        func_code = source_code[func_node.start_byte:func_node.end_byte]
-        func_name_node = capture_func_name[0][0]
-        coms_pos = []
-        for coms_node, _ in capture_coms:
-            if func_node.start_byte <= coms_node.start_byte < func_node.end_byte:
-                coms_pos.append((coms_node.start_byte - func_node.start_byte,
-                                    coms_node.end_byte - func_node.end_byte))
-        docs_pos = []
-        for docs_node, _ in capture_docs:
-            if func_node.start_byte <= docs_node.start_byte < docs_node.end_byte:
-                docs_pos.append((docs_node.start_byte - func_node.start_byte,
-                                    docs_node.end_byte - docs_node.end_byte))
-        func_name = func_code[func_name_node.start_byte:func_name_node.end_byte]
-        func_body = func_code[func_name_node.end_byte:]
-        func_body_wo_coms_and_docs = ""
-        last_pos = 0
-        for start_pos, end_pos in sorted(coms_pos):
-            func_body_wo_coms_and_docs += func_code[last_pos:start_pos]
-            last_pos = end_pos
-        func_body_wo_coms_and_docs += func_code[last_pos:]
-        func_body_masked_name = func_code[:func_name_node.start_byte] + "<NAME_MASK>" + func_code[func_name_node.end_byte+1:]
-        return dict()
+    def process_root_node(self, root_node: Node, source_code: str) -> dict:
+        result = dict()
+        func_parts_pos = defaultdict(list)
+        for func_part in Pattern:
+            query = self.py_language.query(func_part.value)
+            captures = query.captures(root_node)
+            for node, _ in captures:
+                func_parts_pos[func_part.name].append((node.start_byte, node.end_byte))
+        for answer in Answer:
+            nodes_to_remove = []
+            match answer.name:
+                case Answer.result_func_name.name:
+                    nodes_to_concat = func_parts_pos[Pattern.func_name.name]
+                case Answer.result_body_with_coms.name:
+                    nodes_to_concat = func_parts_pos[Pattern.func_body.name]
+                case Answer.result_body_no_coms.name:
+                    nodes_to_concat = func_parts_pos[Pattern.func_body.name]
+                    nodes_to_remove = func_parts_pos[Pattern.docs_coms.name]
+                case Answer.result_masked_no_coms.name:
+                    nodes_to_concat = func_parts_pos[Pattern.func_header.name] + func_parts_pos[Pattern.func_body.name]
+                    nodes_to_remove = func_parts_pos[Pattern.docs_coms.name]
+            concatted_nodes = self.concat_nodes(nodes_to_concat, nodes_to_remove, source_code)
+            result[answer.name] = concatted_nodes
+        return result
 
-    def save_result_to_new_dataset(self) -> None:
-        pass
+    def concat_nodes(self, pos_pairs: list[tuple[int, int]], skip_pairs: list[tuple[int, int]], source_code: str) -> str:
+        concatted_nodes = ""
+        for start_pos, end_pos in sorted(pos_pairs):
+            if not ((start_pos, end_pos) in skip_pairs):
+                concatted_nodes += source_code[start_pos:end_pos].lstrip(" ")
+        return concatted_nodes
 
 def main():
     solution = Solution()
-    with open("result.jsonl", "wt") as output:
-        for record in Solution.load_dataset():
-            source_code = record["original_string"]
+    with open("result.jsonl", "wt", encoding="utf-8") as output:
+        for record in solution.load_dataset():
+            source_code = record["whole_func_string"]
             root_node = solution.get_root_node_from_source_code(source_code)
-            result = solution.process_root_node(root_node)
-            solution.save_result_to_new_dataset(result)
+            result = solution.process_root_node(root_node, source_code)
+            record.update(result)
+            json.dump(record, output, ensure_ascii=False)
+            output.write("\n")
 
 if __name__ == "__main__":
     main()
