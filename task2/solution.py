@@ -4,7 +4,7 @@ import tree_sitter_python as tspython
 from pathlib import Path
 from dataclasses import dataclass
 from collections import defaultdict
-from enum import Enum
+from enum import Enum, auto
 import json
 
 class Pattern(Enum):
@@ -25,10 +25,10 @@ class Pattern(Enum):
     """
 
 class Answer(Enum):
-    result_func_name = ...#(Pattern.func_name,)
-    result_body_with_coms = ...#(Pattern.func_body,)
-    result_body_no_coms = ...#(Pattern.func_body, Pattern.docs_coms)
-    result_masked_no_coms = ...#(Pattern.func_header, Pattern.func_name, Pattern.docs_coms)
+    result_func_name = auto()
+    result_body_with_coms = auto()
+    result_body_no_coms = auto()
+    result_masked_no_coms = auto()
 
 
 @dataclass
@@ -54,26 +54,31 @@ class Solution:
                 func_parts_pos[func_part.name].append((node.start_byte, node.end_byte))
         for answer in Answer:
             nodes_to_remove = []
-            match answer.name:
-                case Answer.result_func_name.name:
+            match answer:
+                case Answer.result_func_name:
                     nodes_to_concat = func_parts_pos[Pattern.func_name.name]
-                case Answer.result_body_with_coms.name:
+                case Answer.result_body_with_coms:
                     nodes_to_concat = func_parts_pos[Pattern.func_body.name]
-                case Answer.result_body_no_coms.name:
+                case Answer.result_body_no_coms:
                     nodes_to_concat = func_parts_pos[Pattern.func_body.name]
                     nodes_to_remove = func_parts_pos[Pattern.docs_coms.name]
-                case Answer.result_masked_no_coms.name:
-                    nodes_to_concat = func_parts_pos[Pattern.func_header.name] + func_parts_pos[Pattern.func_body.name]
+                case Answer.result_masked_no_coms:
+                    nodes_to_concat = (func_parts_pos[Pattern.func_header.name] + func_parts_pos[Pattern.func_body.name])
                     nodes_to_remove = func_parts_pos[Pattern.docs_coms.name]
-            concatted_nodes = self.concat_nodes(nodes_to_concat, nodes_to_remove, source_code)
+            cleaned = self.substract_nodes(nodes_to_concat, nodes_to_remove)
+            concatted_nodes = self.concat_nodes(cleaned, source_code)
             result[answer.name] = concatted_nodes
         return result
 
-    def concat_nodes(self, pos_pairs: list[tuple[int, int]], skip_pairs: list[tuple[int, int]], source_code: str) -> str:
+    def substract_nodes(self, pos_to_keep: list[tuple[int, int]], pos_to_remove: list[tuple[int, int]]) -> list[tuple[int, int]]:
+        result = []
+        return result
+
+
+    def concat_nodes(self, pos_pairs: list[tuple[int, int]], source_code: str) -> str:
         concatted_nodes = ""
         for start_pos, end_pos in sorted(pos_pairs):
-            if not ((start_pos, end_pos) in skip_pairs):
-                concatted_nodes += source_code[start_pos:end_pos].lstrip(" ")
+            concatted_nodes += source_code[start_pos:end_pos]
         return concatted_nodes
 
 def main():
