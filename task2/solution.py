@@ -1,9 +1,8 @@
 import datasets
-from tree_sitter import Parser, Language, Node
+from tree_sitter import Parser, Language
 import tree_sitter_python as tspython
 from pathlib import Path
 from dataclasses import dataclass
-from collections import defaultdict
 from enum import Enum, auto
 import json
 
@@ -38,56 +37,71 @@ class Solution:
 
     def load_dataset(self) -> datasets.Dataset:
         return datasets.load_dataset(path="code-search-net/code_search_net", name="python", split="test", trust_remote_code=True, cache_dir=(Path(__file__).parent / "datasets"))
-    
-    def get_root_node_from_source_code(self, source_code: str) -> Node:
-        tree = self.parser.parse(source_code.encode())
-        root_node = tree.root_node
-        return root_node
         
-    def process_root_node(self, root_node: Node, source_code: str) -> dict:
+    def process_src_code(self, src_code: str) -> dict:
         result = dict()
-        func_parts_pos = defaultdict(list)
-        for func_part in Pattern:
-            query = self.py_language.query(func_part.value)
-            captures = query.captures(root_node)
-            for node, _ in captures:
-                func_parts_pos[func_part.name].append((node.start_byte, node.end_byte))
         for answer in Answer:
-            nodes_to_remove = []
             match answer:
                 case Answer.result_func_name:
-                    nodes_to_concat = func_parts_pos[Pattern.func_name.name]
+                    result[Answer.result_func_name.name] = self.get_func_name(src_code)
                 case Answer.result_body_with_coms:
-                    nodes_to_concat = func_parts_pos[Pattern.func_body.name]
+                    result[Answer.result_body_with_coms.name] = self.remove_header(src_code)
                 case Answer.result_body_no_coms:
-                    nodes_to_concat = func_parts_pos[Pattern.func_body.name]
-                    nodes_to_remove = func_parts_pos[Pattern.docs_coms.name]
+                    body_no_header = self.remove_header(src_code)
+                    result[Answer.result_body_no_coms.name] = self.remove_comments(body_no_header)
                 case Answer.result_masked_no_coms:
-                    nodes_to_concat = (func_parts_pos[Pattern.func_header.name] + func_parts_pos[Pattern.func_body.name])
-                    nodes_to_remove = func_parts_pos[Pattern.docs_coms.name]
-            cleaned = self.substract_nodes(nodes_to_concat, nodes_to_remove)
-            concatted_nodes = self.concat_nodes(cleaned, source_code)
-            result[answer.name] = concatted_nodes
+                    masked_name = self.mask_func_name(src_code)
+                    result[Answer.result_masked_no_coms.name] = self.remove_comments(masked_name)
         return result
 
-    def substract_nodes(self, pos_to_keep: list[tuple[int, int]], pos_to_remove: list[tuple[int, int]]) -> list[tuple[int, int]]:
-        result = []
-        return result
+    def remove_header(self, src_code: str) -> str:
+        tree = self.parser.parse(src_code.encode())
+        root_node = tree.root_node
+        query = self.py_language.query(Pattern.func_body.value)
+        captures = query.captures(root_node)
+        body_node = captures[0][0]
+        new_source_code = src_code[body_node.start_byte:body_node.end_byte]
+        return new_source_code
 
+    def mask_func_name(self, src_code: str) -> str:
+        tree = self.parser.parse(src_code.encode())
+        root_node = tree.root_node
+        query = self.py_language.query(Pattern.func_name.value)
+        captures = query.captures(root_node)
+        node_to_edit = captures[0][0]
+        new_text = "<NAME_MASK>"
+        new_source_code = (
+            src_code[:node_to_edit.start_byte] + new_text + src_code[node_to_edit.end_byte:]
+        )
+        return new_source_code
+    
+    def get_func_name(self, src_code: str) -> str:
+        tree = self.parser.parse(src_code.encode())
+        root_node = tree.root_node
+        query = self.py_language.query(Pattern.func_name.value)
+        captures = query.captures(root_node)
+        func_name_node = captures[0][0]
+        name = src_code[func_name_node.start_byte:func_name_node.end_byte]
+        return name
 
-    def concat_nodes(self, pos_pairs: list[tuple[int, int]], source_code: str) -> str:
-        concatted_nodes = ""
-        for start_pos, end_pos in sorted(pos_pairs):
-            concatted_nodes += source_code[start_pos:end_pos]
-        return concatted_nodes
+    def remove_comments(self, source_code: str) -> str:
+        tree = self.parser.parse(source_code.encode())
+        root_node = tree.root_node
+        query = self.py_language.query(Pattern.docs_coms.value)
+        captures = query.captures(root_node)
+        new_source_code = source_code
+        for node, _ in reversed(captures):
+            new_source_code = (
+                new_source_code[:node.start_byte] + new_source_code[node.end_byte:]
+            )
+        return new_source_code
 
 def main():
     solution = Solution()
     with open("result.jsonl", "wt", encoding="utf-8") as output:
         for record in solution.load_dataset():
             source_code = record["whole_func_string"]
-            root_node = solution.get_root_node_from_source_code(source_code)
-            result = solution.process_root_node(root_node, source_code)
+            result = solution.process_src_code(source_code)
             record.update(result)
             json.dump(record, output, ensure_ascii=False)
             output.write("\n")
