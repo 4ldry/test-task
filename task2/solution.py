@@ -93,7 +93,7 @@ class Solution:
         for node, _ in reversed(captures):
             new_source_code = (
                 new_source_code[:node.start_byte] + new_source_code[node.end_byte:]
-            )
+            ).lstrip("\n")
         return new_source_code
 
 def main():
