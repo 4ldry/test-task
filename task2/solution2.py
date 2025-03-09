@@ -7,6 +7,7 @@ from enum import Enum, auto
 from collections.abc import Generator
 import json
 
+
 class Answer(Enum):
     result_func_name = auto()
     result_body_with_coms = auto()
@@ -20,29 +21,41 @@ class Solution:
     parser: Parser = Parser(language=py_language)
 
     def load_dataset(self) -> datasets.Dataset:
-        return datasets.load_dataset(path="code-search-net/code_search_net", name="python", split="test", trust_remote_code=True, cache_dir=(Path(__file__).parent / "datasets"))
-        
+        return datasets.load_dataset(
+            path="code-search-net/code_search_net",
+            name="python",
+            split="test",
+            trust_remote_code=True,
+            cache_dir=(Path(__file__).parent / "datasets"),
+        )
+
     def process_src_code(self, src_code: str) -> dict[str, str]:
-        tree = self.parser.parse(src_code.encode())        
+        tree = self.parser.parse(src_code.encode())
 
         func_name, func_body, func_header, comments = self.extract_function_info(tree)
 
         result = dict()
 
         src_code_no_comments = self.remove_comments(comments, src_code)
-        result[Answer.result_masked_no_coms.name] = self.mask_func_name(func_name, src_code_no_comments)
+        result[Answer.result_masked_no_coms.name] = self.mask_func_name(
+            func_name, src_code_no_comments
+        )
 
         result[Answer.result_func_name.name] = self.extract_text(src_code, func_name)
-        
+
         body_with_comments = func_body
-        result[Answer.result_body_with_coms.name] = self.extract_text(src_code, body_with_comments)
-        
-        result[Answer.result_body_no_coms.name] = self.remove_header(func_header, src_code_no_comments)
-        
+        result[Answer.result_body_with_coms.name] = self.extract_text(
+            src_code, body_with_comments
+        )
+
+        result[Answer.result_body_no_coms.name] = self.remove_header(
+            func_header, src_code_no_comments
+        )
+
         return result
 
     def extract_text(self, src_code: str, node: Node) -> str:
-        return src_code[node.start_byte:node.end_byte]
+        return src_code[node.start_byte : node.end_byte]
 
     def traverse_tree(self, tree: Tree) -> Generator[Node]:
         cursor = tree.walk()
@@ -74,25 +87,30 @@ class Solution:
                     else:
                         if func_header is None:
                             func_header = subnode
-            elif node.type == "comment" or (node.type == "string" and node.parent.type == "expression_statement"):
+            elif node.type == "comment" or (
+                node.type == "string" and node.parent.type == "expression_statement"
+            ):
                 comments.append(node)
         return func_name, func_body, func_header, comments
 
     def mask_func_name(self, name_node: Node, src_code: str) -> str:
         return (
-            src_code[:name_node.start_byte] +
-            "<NAME_MASK>" +
-            src_code[name_node.end_byte:]
+            src_code[: name_node.start_byte]
+            + "<NAME_MASK>"
+            + src_code[name_node.end_byte :]
         )
-    
+
     def remove_header(self, header_node: Node, src_code: str) -> str:
-        return src_code[header_node.start_byte:]
+        return src_code[header_node.start_byte :]
 
     def remove_comments(self, coms_nodes: list[Node], src_code: str) -> str:
-        positions = sorted([(node.start_byte, node.end_byte) for node in coms_nodes], reverse=True)
+        positions = sorted(
+            [(node.start_byte, node.end_byte) for node in coms_nodes], reverse=True
+        )
         for start, end in positions:
             src_code = src_code[:start] + src_code[end:]
         return src_code
+
 
 def main():
     solution = Solution()
@@ -103,6 +121,7 @@ def main():
             record.update(result)
             json.dump(record, output, ensure_ascii=False)
             output.write("\n")
+
 
 if __name__ == "__main__":
     main()
