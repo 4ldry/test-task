@@ -26,7 +26,7 @@ class Solution:
             src_code = record["result_masked_with_coms"]
         elif mode == "no_coms":
             src_code = record["result_masked_no_coms"]
-        encoded = self.tokenizer.encode_plus(
+        encoded = self.tokenizer(
             src_code,
             add_special_tokens=True,
             return_tensors="pt",
